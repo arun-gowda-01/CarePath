@@ -5,242 +5,431 @@ import { validateRequest } from "../utils/validation.js";
 import Exercise from "../models/Exercise.js";
 import Task from "../models/Task.js";
 import Patient from "../models/Patient.js";
-import axios from "axios";
 
-// ExerciseDB API configuration
-const EXERCISEDB_API_URL = "https://www.exercisedb.dev/api/v1";
+// ============================================================
+// SEARCH EXERCISES FROM MONGODB
+// ============================================================
 
-// Search exercises from ExerciseDB API by muscle group or name
 export const searchExercisesFromAPI = asyncHandler(
-	async (req: Request, res: Response) => {
-		const { bodyPart } = req.query;
+    async (req: Request, res: Response) => {
+        const { bodyPart, search } = req.query;
 
-		try {
-			let url = "";
-			if (bodyPart) {
-				// Search by muscle group (e.g., abs, chest, biceps)
-				url = `${EXERCISEDB_API_URL}/bodyparts/${bodyPart}/exercises`;
-			}
+        if (!bodyPart && !search) {
+            throw new ApiError(
+                "Body part or search term is required",
+                400
+            );
+        }
 
-			const response = await axios.get(url);
+        const query: any = {};
 
-			return res.sendResponse({
-				statusCode: 200,
-				success: true,
-				message: "Exercises retrieved from ExerciseDB successfully",
-				data: response.data.data,
-			});
-		} catch (error: any) {
-			if (error.response?.status === 429) {
-				throw new ApiError(
-					"ExerciseDB API rate limit exceeded. Please try again later.",
-					429
-				);
-			}
-			throw new ApiError(
-				`Failed to fetch exercises from ExerciseDB: ${error.message}`,
-				500
-			);
-		}
-	}
+        if (bodyPart) {
+            query.bodyParts = {
+                $regex: `^${String(bodyPart).trim()}$`,
+                $options: "i",
+            };
+        }
+
+        if (search) {
+            query.name = {
+                $regex: String(search).trim(),
+                $options: "i",
+            };
+        }
+
+        const mongoExercises = await Exercise.find(query)
+            .sort({ name: 1 })
+            .lean();
+
+        // Convert MongoDB field name to the field name
+        // expected by the existing frontend.
+        const exercises = mongoExercises.map((exercise) => ({
+            ...exercise,
+            exerciseId: exercise.exerciseDbId,
+        }));
+
+        console.log(
+            `MongoDB exercise search: ${exercises.length} exercises found`
+        );
+
+        return res.sendResponse({
+            statusCode: 200,
+            success: true,
+            message: "Exercises retrieved successfully from MongoDB",
+            data: exercises,
+        });
+    }
 );
 
-// Get available muscle groups/body parts
+// ============================================================
+// GET BODY PARTS FROM MONGODB
+// ============================================================
+
 export const getBodyParts = asyncHandler(
-	async (req: Request, res: Response) => {
-		try {
-			const { data } = await axios.get(`${EXERCISEDB_API_URL}/bodyparts`);
+    async (req: Request, res: Response) => {
+        // Get all unique body parts from the 1500 exercises
+        const bodyParts = await Exercise.distinct("bodyParts");
 
-			const bodyParts = data.data.map((el: { name: string }) => el.name);
+        // Remove empty values and sort alphabetically
+        const cleanedBodyParts = bodyParts
+            .filter(
+                (part): part is string =>
+                    typeof part === "string" && part.trim().length > 0
+            )
+            .map((part) => part.trim())
+            .filter(
+                (part, index, array) =>
+                    array.findIndex(
+                        (item) =>
+                            item.toLowerCase() === part.toLowerCase()
+                    ) === index
+            )
+            .sort((a, b) => a.localeCompare(b));
 
-			return res.sendResponse({
-				statusCode: 200,
-				success: true,
-				message: "Muscles retrieved successfully",
-				data: bodyParts,
-			});
-		} catch (error: any) {
-			throw new ApiError(
-				`Failed to fetch muscles: ${error.message}`,
-				500
-			);
-		}
-	}
+        console.log(
+            `MongoDB body parts: ${cleanedBodyParts.length}`
+        );
+
+        return res.sendResponse({
+            statusCode: 200,
+            success: true,
+            message: "Body parts retrieved successfully from MongoDB",
+            data: cleanedBodyParts,
+        });
+    }
 );
 
-// Assign exercise to patient (creates both Exercise document and Task)
+// ============================================================
+// ASSIGN EXERCISE TO PATIENT
+// ============================================================
+
 export const assignExerciseToPatient = asyncHandler(
-	async (req: Request, res: Response) => {
-		const { patientId, exerciseData, scheduledTime, priority, recurring } =
-			req.body;
+    async (req: Request, res: Response) => {
+        const {
+            patientId,
+            exerciseData,
+            scheduledTime,
+            priority,
+            recurring,
+        } = req.body;
 
-		validateRequest([
-			{
-				field: "patientId",
-				value: patientId,
-				rules: { required: true, type: "string" },
-			},
-			{
-				field: "exerciseData",
-				value: exerciseData,
-				rules: { required: true, type: "object" },
-			},
-		]);
+        validateRequest([
+            {
+                field: "patientId",
+                value: patientId,
+                rules: {
+                    required: true,
+                    type: "string",
+                },
+            },
+            {
+                field: "exerciseData",
+                value: exerciseData,
+                rules: {
+                    required: true,
+                    type: "object",
+                },
+            },
+        ]);
 
-		const patient = await Patient.findById(patientId);
-		if (!patient) {
-			throw new ApiError("Patient not found", 404);
-		}
+        // ------------------------------------------------
+        // Check patient
+        // ------------------------------------------------
 
-		// Create or update Exercise document with exerciseDbId
-		const exerciseDoc = await Exercise.findOneAndUpdate(
-			{
-				exerciseDbId: exerciseData.exerciseId,
-			},
-			{
-				exerciseDbId: exerciseData.exerciseId,
-				name: exerciseData.name,
-			},
-			{
-				upsert: true,
-				new: true,
-			}
-		);
+        const patient = await Patient.findById(patientId);
 
-		// Create Task linking to the exercise
-		const task = await Task.create({
-			patientId,
-			title: exerciseData.name,
-			description: `Target: ${
-				exerciseData.targetMuscles?.join(", ") || "N/A"
-			} | Equipment: ${exerciseData.equipment || "bodyweight"}`,
-			type: "exercise",
-			exerciseId: exerciseDoc._id,
-			scheduledTime: new Date(scheduledTime),
-			priority: priority || "medium",
-			recurring,
-		});
+        if (!patient) {
+            throw new ApiError(
+                "Patient not found",
+                404
+            );
+        }
 
-		// Populate exercise data in task
-		const populatedTask = await Task.findById(task._id).populate(
-			"exerciseId"
-		);
+        // ------------------------------------------------
+        // Get ExerciseDB ID
+        // ------------------------------------------------
 
-		return res.sendResponse({
-			statusCode: 201,
-			success: true,
-			message: "Exercise assigned to patient successfully",
-			data: populatedTask,
-		});
-	}
+        const exerciseDbId =
+            exerciseData.exerciseId ||
+            exerciseData.exerciseDbId;
+
+        if (!exerciseDbId) {
+            throw new ApiError(
+                "Exercise ID is required",
+                400
+            );
+        }
+
+        // ------------------------------------------------
+        // Find exercise in MongoDB
+        // Use exerciseDbId only
+        // ------------------------------------------------
+
+        const existingExercise =
+            await Exercise.findOne({
+                exerciseDbId: String(exerciseDbId),
+            });
+
+        if (!existingExercise) {
+            throw new ApiError(
+                "Exercise not found in MongoDB",
+                404
+            );
+        }
+
+        // ------------------------------------------------
+        // Exercise information
+        // ------------------------------------------------
+
+        const equipment =
+            existingExercise.equipments?.join(", ") ||
+            "bodyweight";
+
+        const targetMuscles =
+            existingExercise.targetMuscles?.join(", ") ||
+            "N/A";
+
+        // ------------------------------------------------
+        // Create task
+        // ------------------------------------------------
+
+        const task = await Task.create({
+            patientId,
+
+            title: existingExercise.name,
+
+            description:
+                `Target: ${targetMuscles} | Equipment: ${equipment}`,
+
+            type: "exercise",
+
+            exerciseId: existingExercise._id,
+
+            scheduledTime: scheduledTime
+                ? new Date(scheduledTime)
+                : new Date(),
+
+            priority:
+                priority || "medium",
+
+            recurring,
+        });
+
+        // ------------------------------------------------
+        // Populate exercise
+        // ------------------------------------------------
+
+        const populatedTask =
+            await Task.findById(task._id)
+                .populate("exerciseId");
+
+        return res.sendResponse({
+            statusCode: 201,
+            success: true,
+            message:
+                "Exercise assigned to patient successfully",
+            data: populatedTask,
+        });
+    }
 );
 
-// Get all exercises assigned to a patient
+// ============================================================
+// GET ALL EXERCISES ASSIGNED TO PATIENT
+// ============================================================
+
 export const getPatientExercises = asyncHandler(
-	async (req: Request, res: Response) => {
-		const { patientId } = req.params;
-		const { completed, startDate, endDate } = req.query;
+    async (req: Request, res: Response) => {
+        const { patientId } = req.params;
 
-		const query: any = {
-			patientId,
-			type: "exercise",
-		};
+        const {
+            completed,
+            startDate,
+            endDate,
+        } = req.query;
 
-		if (completed !== undefined) {
-			query.completed = completed === "true";
-		}
+        const query: any = {
+            patientId,
+            type: "exercise",
+        };
 
-		if (startDate || endDate) {
-			query.scheduledTime = {};
-			if (startDate)
-				query.scheduledTime.$gte = new Date(startDate as string);
-			if (endDate) query.scheduledTime.$lte = new Date(endDate as string);
-		}
+        // ----------------------------------------------------
+        // Completed filter
+        // ----------------------------------------------------
 
-		const tasks = await Task.find(query)
-			.populate("exerciseId")
-			.sort({ scheduledTime: 1 });
+        if (completed !== undefined) {
+            query.completed =
+                completed === "true";
+        }
 
-		return res.sendResponse({
-			statusCode: 200,
-			success: true,
-			message: "Patient exercises retrieved successfully",
-			data: tasks,
-		});
-	}
+        // ----------------------------------------------------
+        // Date filter
+        // ----------------------------------------------------
+
+        if (startDate || endDate) {
+            query.scheduledTime = {};
+
+            if (startDate) {
+                query.scheduledTime.$gte =
+                    new Date(startDate as string);
+            }
+
+            if (endDate) {
+                query.scheduledTime.$lte =
+                    new Date(endDate as string);
+            }
+        }
+
+        // ----------------------------------------------------
+        // Get tasks
+        // ----------------------------------------------------
+
+        const tasks =
+            await Task.find(query)
+                .populate("exerciseId")
+                .sort({
+                    scheduledTime: 1,
+                });
+
+        return res.sendResponse({
+            statusCode: 200,
+            success: true,
+            message:
+                "Patient exercises retrieved successfully",
+            data: tasks,
+        });
+    }
 );
 
-// Update exercise assignment
+// ============================================================
+// UPDATE EXERCISE ASSIGNMENT
+// ============================================================
+
 export const updateExerciseAssignment = asyncHandler(
-	async (req: Request, res: Response) => {
-		const { taskId } = req.params;
-		const { completed, scheduledTime, priority } = req.body;
+    async (req: Request, res: Response) => {
+        const { taskId } = req.params;
 
-		const task = await Task.findOne({ _id: taskId, type: "exercise" });
-		if (!task) {
-			throw new ApiError("Exercise task not found", 404);
-		}
+        const {
+            completed,
+            scheduledTime,
+            priority,
+        } = req.body;
 
-		// Update task
-		if (completed !== undefined) {
-			task.completed = completed;
-			if (completed) {
-				task.completedAt = new Date();
-			} else {
-				task.completedAt = undefined;
-			}
-		}
+        // ----------------------------------------------------
+        // Find exercise task
+        // ----------------------------------------------------
 
-		if (scheduledTime) task.scheduledTime = new Date(scheduledTime);
-		if (priority) task.priority = priority;
+        const task =
+            await Task.findOne({
+                _id: taskId,
+                type: "exercise",
+            });
 
-		await task.save();
+        if (!task) {
+            throw new ApiError(
+                "Exercise task not found",
+                404
+            );
+        }
 
-		const populatedTask = await Task.findById(task._id).populate(
-			"exerciseId"
-		);
+        // ----------------------------------------------------
+        // Update completed
+        // ----------------------------------------------------
 
-		return res.sendResponse({
-			statusCode: 200,
-			success: true,
-			message: "Exercise assignment updated successfully",
-			data: populatedTask,
-		});
-	}
+        if (completed !== undefined) {
+            task.completed = completed;
+
+            if (completed) {
+                task.completedAt = new Date();
+            } else {
+                task.completedAt = undefined;
+            }
+        }
+
+        // ----------------------------------------------------
+        // Update scheduled time
+        // ----------------------------------------------------
+
+        if (scheduledTime) {
+            task.scheduledTime =
+                new Date(scheduledTime);
+        }
+
+        // ----------------------------------------------------
+        // Update priority
+        // ----------------------------------------------------
+
+        if (priority) {
+            task.priority = priority;
+        }
+
+        await task.save();
+
+        // ----------------------------------------------------
+        // Populate exercise
+        // ----------------------------------------------------
+
+        const populatedTask =
+            await Task.findById(task._id)
+                .populate("exerciseId");
+
+        return res.sendResponse({
+            statusCode: 200,
+            success: true,
+            message:
+                "Exercise assignment updated successfully",
+            data: populatedTask,
+        });
+    }
 );
 
-// Delete exercise assignment
+// ============================================================
+// DELETE EXERCISE ASSIGNMENT
+// ============================================================
+
 export const deleteExerciseAssignment = asyncHandler(
-	async (req: Request, res: Response) => {
-		const { taskId } = req.params;
+    async (req: Request, res: Response) => {
+        const { taskId } = req.params;
 
-		const task = await Task.findOneAndDelete({
-			_id: taskId,
-			type: "exercise",
-		});
-		if (!task) {
-			throw new ApiError("Exercise task not found", 404);
-		}
+        const task =
+            await Task.findOneAndDelete({
+                _id: taskId,
+                type: "exercise",
+            });
 
-		return res.sendResponse({
-			statusCode: 200,
-			success: true,
-			message: "Exercise assignment deleted successfully",
-			data: task,
-		});
-	}
+        if (!task) {
+            throw new ApiError(
+                "Exercise task not found",
+                404
+            );
+        }
+
+        return res.sendResponse({
+            statusCode: 200,
+            success: true,
+            message:
+                "Exercise assignment deleted successfully",
+            data: task,
+        });
+    }
 );
 
-// Get all exercises in the system (for admin/reference)
-export const getAllExercises = asyncHandler(
-	async (req: Request, res: Response) => {
-		const exercises = await Exercise.find().sort({ name: 1 });
+// ============================================================
+// GET ALL EXERCISES FROM MONGODB
+// ============================================================
 
-		return res.sendResponse({
-			statusCode: 200,
-			success: true,
-			message: "Exercises retrieved successfully",
-			data: exercises,
-		});
-	}
+export const getAllExercises = asyncHandler(
+    async (req: Request, res: Response) => {
+        const exercises =
+            await Exercise.find()
+                .sort({ name: 1 })
+                .lean();
+
+        return res.sendResponse({
+            statusCode: 200,
+            success: true,
+            message:
+                "All exercises retrieved successfully from MongoDB",
+            data: exercises,
+        });
+    }
 );

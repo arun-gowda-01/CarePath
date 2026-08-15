@@ -335,7 +335,7 @@ export const markDoseAsTaken = asyncHandler(
 		// Verify this medication belongs to the patient
 		if (
 			medication.patientId.toString() !==
-			(patient._id as string).toString()
+			patient._id.toString()
 		) {
 			throw new ApiError("Unauthorized access to this medication", 403);
 		}

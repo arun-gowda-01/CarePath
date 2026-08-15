@@ -101,7 +101,7 @@ function ExerciseManagement({
 
 		try {
 			const { data } = await axios.get(
-				`https://www.exercisedb.dev/api/v1/exercises/${exerciseDbId}`
+				`https://oss.exercisedb.dev/api/v1/exercises/${exerciseDbId}`
 			);
 			setExerciseDetails((prev) =>
 				new Map(prev).set(exerciseDbId, data.data)

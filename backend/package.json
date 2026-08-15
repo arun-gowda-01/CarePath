@@ -4,11 +4,12 @@
 	"main": "dist/index.js",
 	"type": "module",
 	"scripts": {
-		"dev": "dotenvx run -- tsx --watch src/index.ts",
-		"start": "dotenvx run -- node dist/index.js",
-		"build": "tsc",
-		"typecheck": "tsc --noEmit"
-	},
+    "dev": "dotenvx run -- tsx --watch src/index.ts",
+    "start": "dotenvx run -- node dist/index.js",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "import:exercises": "dotenvx run -- tsx src/scripts/importExercises.ts"
+},
 	"keywords": [],
 	"author": "",
 	"license": "ISC",

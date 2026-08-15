@@ -235,7 +235,7 @@ function PatientCheckIn() {
 			} else {
 				// Use JSON
 				payload = {
-					patientId: user.id,
+					userId: user.id,
 					painLevel: formData.painLevel,
 					temperature: formData.temperature,
 					bloodPressure: {
@@ -248,10 +248,7 @@ function PatientCheckIn() {
 						| "good"
 						| "excellent",
 					notes: formData.notes,
-					symptoms: selectedSymptoms.map((symptom) => ({
-						type: symptom,
-						description: symptom,
-					})),
+					symptoms: selectedSymptoms,
 				};
 			}
 

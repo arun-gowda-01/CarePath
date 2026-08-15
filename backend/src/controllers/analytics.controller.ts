@@ -491,7 +491,7 @@ export const getDoctorAdherenceAnalytics = asyncHandler(
 
 				return {
 					patientId: patient._id,
-					patientName: `${patient.userId.firstName} ${patient.userId.lastName}`,
+					patientName: `${(patient.userId as any).firstName} ${(patient.userId as any).lastName}`,
 					procedure: patient.procedure,
 					adherence: adherence.overallAdherence,
 					taskAdherence: adherence.taskAdherence,

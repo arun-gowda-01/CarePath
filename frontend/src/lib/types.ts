@@ -587,11 +587,6 @@ export interface CreateRoomData {
 	participantId: string;
 }
 
-export interface VideoCallSignal {
-	roomId: string;
-	signal: unknown;
-	targetUserId: string;
-}
 
 // ==================== Exercise Types ====================
 export interface Exercise {

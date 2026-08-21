@@ -13,7 +13,7 @@ function PatientHome() {
 	const { user } = useAuth();
 	const [tasks, setTasks] = useState<Task[]>([]);
 	const [loading, setLoading] = useState(true);
-	const [patientId, setPatientId] = useState<string | null>(null);
+	const [, setPatientId] = useState<string | null>(null);
 	const [userName, setUserName] = useState("Patient");
 	const [daysPostOp, setDaysPostOp] = useState(0);
 	const [monitoringDays, setMonitoringDays] = useState(7);

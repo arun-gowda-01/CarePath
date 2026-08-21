@@ -71,12 +71,6 @@ function Alerts() {
 		);
 	}
 
-	const stats = {
-		active: alerts.filter((a) => a.status === "active").length,
-		dismissed: alerts.filter((a) => a.status === "dismissed").length,
-		resolved: alerts.filter((a) => a.status === "resolved").length,
-	};
-
 	const statusFilters = [
 		{ value: null, label: "All Alerts", variant: "default" as const },
 		{

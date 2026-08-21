@@ -308,44 +308,6 @@ function PatientCheckIn() {
 		);
 	};
 
-	// Add helper to get the most recent check-in
-	const latestCheckIn = checkInHistory.length > 0 ? checkInHistory[0] : null;
-
-	// Helper to calculate time since last check-in
-	const getTimeSinceCheckIn = (date: string | Date) => {
-		const now = new Date();
-		const checkInDate = new Date(date);
-		const diffMs = now.getTime() - checkInDate.getTime();
-		const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-		const diffDays = Math.floor(diffHours / 24);
-
-		if (diffDays > 0) {
-			return `${diffDays} day${diffDays > 1 ? "s" : ""} ago`;
-		} else if (diffHours > 0) {
-			return `${diffHours} hour${diffHours > 1 ? "s" : ""} ago`;
-		} else {
-			return "Just now";
-		}
-	};
-
-	// Helper to get risk level based on vitals
-	const getRiskIndicator = (checkIn: SymptomCheckIn) => {
-		if (checkIn.temperature > 38 || checkIn.painLevel >= 8) {
-			return {
-				level: "High Risk",
-				color: "bg-red-100 text-red-800 border-red-200",
-			};
-		} else if (checkIn.painLevel >= 6 || checkIn.temperature > 37.5) {
-			return {
-				level: "Monitor",
-				color: "bg-yellow-100 text-yellow-800 border-yellow-200",
-			};
-		}
-		return {
-			level: "Stable",
-			color: "bg-green-100 text-green-800 border-green-200",
-		};
-	};
 
 	// -------------------------------
 	// UI

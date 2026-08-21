@@ -16,7 +16,6 @@ import type {
 	CreateAlertData,
 	UpdateAlertData,
 	CreateRoomData,
-	VideoCallSignal,
 	AssignExerciseData,
 	UpdateExerciseData,
 	CreateFollowUpConsultationData,
@@ -287,7 +286,6 @@ export const videoCallApi = {
 	joinRoom: (roomId: string) => api.get(`/video-call/join/${roomId}`),
 	endCall: (roomId: string) => api.post(`/video-call/end/${roomId}`),
 	getSession: (roomId: string) => api.get(`/video-call/session/${roomId}`),
-	sendSignal: (data: VideoCallSignal) => api.post("/video-call/signal", data),
 	getConsultationsForPatient: (patientId: string) =>
 		api.get(`/video-call/consultations/${patientId}`),
 };

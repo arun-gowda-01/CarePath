@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useEffect, useState } from "react";
 import { useAuth } from "@/context/AuthContext";
-import { messageApi, patientApi, videoCallApi } from "@/lib/api";
+import { messageApi, patientApi } from "@/lib/api";
 import { getSocket } from "@/lib/socket";
 import type { Message as ApiMessage } from "@/lib/types";
 import { toast } from "sonner";
@@ -10,20 +10,10 @@ import { toast } from "sonner";
 function Messages() {
 	const { user } = useAuth();
 	const [messageInput, setMessageInput] = useState("");
-	const [callState, setCallState] = useState<
-		"idle" | "ringing" | "connected" | "ended"
-	>("idle");
-	const [isMuted, setIsMuted] = useState(false);
-	const [isVideoOn, setIsVideoOn] = useState(true);
-	const [callDuration, setCallDuration] = useState(0);
 	const [conversations, setConversations] = useState<any[]>([]);
 	const [selectedConversation, setSelectedConversation] = useState<any | null>(
 		null
 	);
-	const [currentRoomId, setCurrentRoomId] = useState<string | null>(null);
-	const [incomingCall, setIncomingCall] = useState<
-		{ roomId: string; fromName?: string } | null
-	>(null);
 
 	const generateConversationId = () => {
 		return `${user?.id || "u"}-${Date.now()}-${Math.random()
@@ -95,15 +85,6 @@ function Messages() {
 		}
 	};
 
-	useEffect(() => {
-		let interval: ReturnType<typeof setInterval> | undefined;
-		if (callState === "connected") {
-			interval = setInterval(() => {
-				setCallDuration((prev) => prev + 1);
-			}, 1000);
-		}
-		return () => clearInterval(interval);
-	}, [callState]);
 
 	useEffect(() => {
 		if (!user) return;
@@ -242,46 +223,15 @@ function Messages() {
 			}
 		};
 
-		const handleIncomingCall = (payload: {
-			roomId?: string;
-			fromUserId?: string;
-			fromName?: string;
-		}) => {
-			if (!payload?.roomId) return;
-			setIncomingCall({
-				roomId: payload.roomId,
-				fromName: payload.fromName,
-			});
-			setCallState("ringing");
-			setCallDuration(0);
-			toast.info(
-				`Incoming video call from ${payload.fromName || "your doctor"
-				}`
-			);
-		};
-
-		const handleVideoEnded = (payload: { roomId?: string }) => {
-			if (!payload?.roomId) return;
-			if (currentRoomId && payload.roomId === currentRoomId) {
-				setCallState("idle");
-				setCallDuration(0);
-				setCurrentRoomId(null);
-			}
-			setIncomingCall(null);
-		};
 
 		socket.on("message:new", handleNewMessage);
 		socket.on("message:read", handleMessageRead);
-		socket.on("video:incoming", handleIncomingCall);
-		socket.on("video:ended", handleVideoEnded);
 
 		return () => {
 			socket.off("message:new", handleNewMessage);
 			socket.off("message:read", handleMessageRead);
-			socket.off("video:incoming", handleIncomingCall);
-			socket.off("video:ended", handleVideoEnded);
 		};
-	}, [user, selectedConversation, currentRoomId]);
+	}, [user, selectedConversation]);
 
 	const handleSendMessage = async () => {
 		if (!messageInput.trim() || !selectedConversation) return;
@@ -307,72 +257,6 @@ function Messages() {
 		}
 	};
 
-	const handleAcceptCall = async () => {
-		if (!incomingCall) return;
-		try {
-			const { roomId } = incomingCall;
-			setCurrentRoomId(roomId);
-			// Open the in-app LiveKit-powered video call page
-			window.open(`/video-call/${roomId}`, "_blank", "noopener,noreferrer");
-			setCallState("connected");
-			setIncomingCall(null);
-		} catch (error) {
-			toast.error("Failed to join video call");
-			setCallState("idle");
-			setCallDuration(0);
-			setCurrentRoomId(null);
-			setIncomingCall(null);
-		}
-	};
-
-	const handleDeclineCall = async () => {
-		if (!incomingCall) return;
-		const { roomId } = incomingCall;
-		setIncomingCall(null);
-		try {
-			await videoCallApi.endCall(roomId);
-		} catch {
-			// ignore API errors when declining
-		}
-		setCallState("idle");
-		setCallDuration(0);
-	};
-
-	const handleEndCall = async () => {
-		const updatedConversations = conversations.map((conv) => {
-			if (conv.id === selectedConversation.id) {
-				return {
-					...conv,
-					callHistory: [
-						{
-							type: "video",
-							duration: `${Math.floor(
-								callDuration / 60
-							)}:${String(callDuration % 60).padStart(2, "0")}`,
-							date: new Date().toLocaleString(),
-							status: "completed",
-						},
-						...conv.callHistory,
-					],
-				};
-			}
-			return conv;
-		});
-		setConversations(updatedConversations);
-		setSelectedConversation(
-			updatedConversations.find((c) => c.id === selectedConversation.id)!
-		);
-		if (currentRoomId) {
-			try {
-				await videoCallApi.endCall(currentRoomId);
-			} catch {
-				// ignore API errors when ending
-			}
-		}
-		setCallState("idle");
-		setCallDuration(0);
-		setCurrentRoomId(null);
-	};
 
 	const handleNewChat = () => {
 		if (!conversations.length) return;
@@ -392,15 +276,8 @@ function Messages() {
 		setConversations((prev: any[]) => [newConv, ...prev]);
 		setSelectedConversation(newConv);
 		setMessageInput("");
-		setCallState("idle");
-		setCallDuration(0);
 	};
 
-	const formatCallDuration = (seconds: number) => {
-		const mins = Math.floor(seconds / 60);
-		const secs = seconds % 60;
-		return `${mins}:${String(secs).padStart(2, "0")}`;
-	};
 
 	return (
 		<div className="w-full mx-auto p-4 md:p-6 h-[calc(100vh-5rem)] flex flex-col md:flex-row gap-4">
@@ -415,7 +292,6 @@ function Messages() {
 							key={conv.conversationId}
 							onClick={() => {
 								setSelectedConversation(conv);
-								setCallState("idle");
 								if (conv.conversationId && !conv.isNew) {
 									loadMessagesForConversation(
 										String(conv.conversationId)
@@ -484,113 +360,6 @@ function Messages() {
 					</div>
 				</div>
 
-				{/* In-Call Interface */}
-				{callState !== "idle" && (
-					<Card className="p-4 mb-4 bg-linear-to-r from-blue-50 to-purple-50 border-blue-200">
-						<div className="flex flex-col gap-4">
-							<div className="flex items-center justify-between">
-								<div>
-									<p className="font-semibold text-foreground">
-										{callState === "ringing"
-											? "Incoming video call"
-											: "Connected"}
-									</p>
-									<p className="text-sm text-muted-foreground">
-										{callState === "ringing"
-											? incomingCall?.fromName ||
-											selectedConversation?.name ||
-											"Your doctor is calling you"
-											: formatCallDuration(callDuration)}
-									</p>
-								</div>
-								{callState === "ringing" && (
-									<div className="flex items-center gap-2">
-										<Button
-											onClick={handleAcceptCall}
-											className="bg-green-600 hover:bg-green-700 text-white"
-										>
-											Accept
-										</Button>
-										<Button
-											onClick={handleDeclineCall}
-											variant="outline"
-										>
-											Decline
-										</Button>
-									</div>
-								)}
-							</div>
-
-							{/* Video Preview Area */}
-							<div className="bg-black rounded-lg aspect-video flex items-center justify-center relative overflow-hidden">
-								{isVideoOn ? (
-									<div className="w-full h-full bg-linear-to-br from-gray-800 to-black flex items-center justify-center">
-										<div className="text-center">
-											<div className="text-6xl mb-2">
-												📹
-											</div>
-											<p className="text-white text-sm">
-												Your video
-											</p>
-										</div>
-									</div>
-								) : (
-									<div className="flex flex-col items-center justify-center gap-2">
-										<div className="text-4xl">🎥</div>
-										<p className="text-white text-sm">
-											Video off
-										</p>
-									</div>
-								)}
-
-								{/* Remote Video Indicator */}
-								<div className="absolute top-4 right-4 w-24 h-24 bg-gray-700 rounded-lg flex items-center justify-center border-2 border-white">
-									<div className="text-center">
-										<div className="text-3xl">👨‍⚕️</div>
-										<p className="text-white text-xs mt-1">
-											{selectedConversation.name}
-										</p>
-									</div>
-								</div>
-							</div>
-
-							{/* Call Controls */}
-							<div className="flex items-center justify-center gap-4">
-								<Button
-									onClick={() => setIsMuted(!isMuted)}
-									variant={
-										isMuted ? "destructive" : "outline"
-									}
-									className="rounded-full w-12 h-12 p-0 flex items-center justify-center"
-									title={isMuted ? "Unmute" : "Mute"}
-								>
-									{isMuted ? "🔇" : "🎤"}
-								</Button>
-								<Button
-									onClick={() => setIsVideoOn(!isVideoOn)}
-									variant={
-										!isVideoOn ? "destructive" : "outline"
-									}
-									className="rounded-full w-12 h-12 p-0 flex items-center justify-center"
-									title={
-										isVideoOn
-											? "Turn off video"
-											: "Turn on video"
-									}
-								>
-									{isVideoOn ? "📹" : "🎥"}
-								</Button>
-								<Button
-									onClick={handleEndCall}
-									className="bg-red-600 hover:bg-red-700 text-white rounded-full w-12 h-12 p-0 flex items-center justify-center"
-									title="End call"
-								>
-									☎️
-								</Button>
-							</div>
-						</div>
-					</Card>
-				)}
 
 				{/* Emergency Banner */}
 				<Card className="p-4 bg-yellow-50 border-yellow-200 text-sm text-yellow-800 mb-4">
@@ -686,15 +455,10 @@ function Messages() {
 							e.key === "Enter" && handleSendMessage()
 						}
 						className="flex-1 px-3 py-2 border border-border rounded-lg bg-input text-foreground"
-						disabled={!selectedConversation || callState !== "idle"}
 					/>
 					<Button
 						onClick={handleSendMessage}
-						disabled={
-							!selectedConversation ||
-							!messageInput.trim() ||
-							callState !== "idle"
-						}
+						disabled={!selectedConversation || !messageInput.trim()}
 					>
 						Send
 					</Button>

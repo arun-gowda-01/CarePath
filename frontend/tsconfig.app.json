@@ -1,32 +1,37 @@
 {
-	"compilerOptions": {
-		"tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
-		"target": "ES2022",
-		"useDefineForClassFields": true,
-		"lib": ["ES2022", "DOM", "DOM.Iterable"],
-		"module": "ESNext",
-		"types": ["vite/client"],
-		"skipLibCheck": true,
-		"composite": true,
+    "compilerOptions": {
+        "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
+        "target": "ES2022",
+        "useDefineForClassFields": true,
+        "lib": ["ES2022", "DOM", "DOM.Iterable"],
+        "module": "ESNext",
+        "types": ["vite/client"],
+        "skipLibCheck": true,
 
-		"moduleResolution": "bundler",
-		"allowImportingTsExtensions": true,
-		"verbatimModuleSyntax": true,
-		"moduleDetection": "force",
-		"emitDeclarationOnly": true,
-		"jsx": "react-jsx",
+        "moduleResolution": "bundler",
+        "allowImportingTsExtensions": true,
+        "verbatimModuleSyntax": true,
+        "moduleDetection": "force",
+        "jsx": "react-jsx",
 
-		"strict": true,
-		"noUnusedLocals": true,
-		"noUnusedParameters": true,
-		"erasableSyntaxOnly": true,
-		"noFallthroughCasesInSwitch": true,
-		"noUncheckedSideEffectImports": true,
+        "strict": true,
+        "noUnusedLocals": true,
+        "noUnusedParameters": true,
+        "noFallthroughCasesInSwitch": true,
+        "noUncheckedSideEffectImports": true,
 
-		"paths": {
-			"@/*": ["./src/*"]
-		}
-	},
+        
+        "paths": {
+            "@/*": ["./src/*"],
+            "@schemas/*": ["../backend/src/schemas/*"],
+            "@models/*": ["../backend/src/models/*"]
+        },
 
-	"include": ["src"]
+        "noEmit": true
+    },
+    "include": [
+        "src",
+        "../backend/src/schemas",
+        "../backend/src/models"
+    ]
 }

@@ -237,6 +237,10 @@ export const assignExerciseToPatient = asyncHandler(
 // GET ALL EXERCISES ASSIGNED TO PATIENT
 // ============================================================
 
+// ============================================================
+// GET EXERCISES ASSIGNED TO PATIENT
+// ============================================================
+
 export const getPatientExercises = asyncHandler(
     async (req: Request, res: Response) => {
         const { patientId } = req.params;
@@ -247,45 +251,276 @@ export const getPatientExercises = asyncHandler(
             endDate,
         } = req.query;
 
+        const now = new Date();
+
+        const todayStart = new Date(
+            now.getFullYear(),
+            now.getMonth(),
+            now.getDate()
+        );
+
+        const tomorrowStart = new Date(
+            todayStart
+        );
+
+        tomorrowStart.setDate(
+            tomorrowStart.getDate() + 1
+        );
+
+        // --------------------------------------------------------
+        // Get all exercise tasks for this patient
+        // --------------------------------------------------------
+
+        const allTasks = await Task.find({
+            patientId,
+            type: "exercise",
+        })
+            .populate("exerciseId")
+            .sort({
+                scheduledTime: 1,
+            });
+
+        // --------------------------------------------------------
+        // Ensure today's occurrence exists for daily exercises
+        // --------------------------------------------------------
+
+        const exerciseGroups = new Map<
+            string,
+            typeof allTasks
+        >();
+
+        for (const task of allTasks) {
+            const exerciseId =
+                task.exerciseId?._id?.toString();
+
+            if (!exerciseId) {
+                continue;
+            }
+
+            if (
+                !exerciseGroups.has(
+                    exerciseId
+                )
+            ) {
+                exerciseGroups.set(
+                    exerciseId,
+                    []
+                );
+            }
+
+            exerciseGroups
+                .get(exerciseId)!
+                .push(task);
+        }
+
+        for (const [, tasks] of exerciseGroups) {
+            const recurringTasks =
+                tasks.filter(
+                    (task) =>
+                        task.recurring?.enabled ===
+                            true &&
+                        task.recurring?.frequency ===
+                            "daily"
+                );
+
+            if (
+                recurringTasks.length === 0
+            ) {
+                continue;
+            }
+
+            // Find the latest occurrence
+            const latestTask =
+                recurringTasks.reduce(
+                    (latest, current) =>
+                        new Date(
+                            current.scheduledTime
+                        ).getTime() >
+                        new Date(
+                            latest.scheduledTime
+                        ).getTime()
+                            ? current
+                            : latest
+                );
+
+            const latestDate =
+                new Date(
+                    latestTask.scheduledTime
+                );
+
+            const latestDayStart =
+                new Date(
+                    latestDate.getFullYear(),
+                    latestDate.getMonth(),
+                    latestDate.getDate()
+                );
+
+            // Already have today's occurrence
+            if (
+                latestDayStart.getTime() ===
+                todayStart.getTime()
+            ) {
+                continue;
+            }
+
+            // Latest occurrence is already in the future
+            if (
+                latestDayStart.getTime() >
+                todayStart.getTime()
+            ) {
+                continue;
+            }
+
+            // ----------------------------------------------------
+            // Create missing daily occurrences until today
+            // ----------------------------------------------------
+
+            let nextDate = new Date(
+                latestDate
+            );
+
+            nextDate.setDate(
+                nextDate.getDate() + 1
+            );
+
+            while (
+                nextDate < tomorrowStart
+            ) {
+                const endDate =
+                    latestTask.recurring
+                        ?.endDate
+                        ? new Date(
+                              latestTask
+                                  .recurring
+                                  .endDate
+                          )
+                        : null;
+
+                if (
+                    endDate &&
+                    nextDate.getTime() >
+                        endDate.getTime()
+                ) {
+                    break;
+                }
+
+                const alreadyExists =
+                    await Task.findOne({
+                        patientId:
+                            latestTask.patientId,
+                        type: "exercise",
+                        exerciseId:
+                            latestTask.exerciseId,
+                        scheduledTime:
+                            nextDate,
+                    });
+
+                if (!alreadyExists) {
+                    await Task.create({
+                        patientId:
+                            latestTask.patientId,
+
+                        title:
+                            latestTask.title,
+
+                        description:
+                            latestTask.description,
+
+                        type: "exercise",
+
+                        exerciseId:
+                            latestTask.exerciseId,
+
+                        scheduledTime:
+                            new Date(
+                                nextDate
+                            ),
+
+                        completed: false,
+
+                        priority:
+                            latestTask.priority,
+
+                        recurring:
+                            latestTask.recurring,
+                    });
+                }
+
+                nextDate = new Date(
+                    nextDate
+                );
+
+                nextDate.setDate(
+                    nextDate.getDate() + 1
+                );
+            }
+        }
+
+        // --------------------------------------------------------
+        // Build final query
+        // --------------------------------------------------------
+
         const query: any = {
             patientId,
             type: "exercise",
         };
 
-        // ----------------------------------------------------
+        // --------------------------------------------------------
         // Completed filter
-        // ----------------------------------------------------
+        // --------------------------------------------------------
 
-        if (completed !== undefined) {
+        if (
+            completed !== undefined
+        ) {
             query.completed =
                 completed === "true";
         }
 
-        // ----------------------------------------------------
+        // --------------------------------------------------------
         // Date filter
-        // ----------------------------------------------------
+        // --------------------------------------------------------
 
-        if (startDate || endDate) {
+        if (
+            startDate ||
+            endDate
+        ) {
             query.scheduledTime = {};
 
             if (startDate) {
                 query.scheduledTime.$gte =
-                    new Date(startDate as string);
+                    new Date(
+                        startDate as string
+                    );
             }
 
             if (endDate) {
                 query.scheduledTime.$lte =
-                    new Date(endDate as string);
+                    new Date(
+                        endDate as string
+                    );
             }
         }
 
-        // ----------------------------------------------------
-        // Get tasks
-        // ----------------------------------------------------
+        // --------------------------------------------------------
+        // If no explicit date filter is supplied,
+        // return today's exercise occurrence(s).
+        // --------------------------------------------------------
+
+        if (
+            !startDate &&
+            !endDate
+        ) {
+            query.scheduledTime = {
+                $gte: todayStart,
+                $lt: tomorrowStart,
+            };
+        }
 
         const tasks =
             await Task.find(query)
-                .populate("exerciseId")
+                .populate(
+                    "exerciseId"
+                )
                 .sort({
                     scheduledTime: 1,
                 });
@@ -305,81 +540,113 @@ export const getPatientExercises = asyncHandler(
 // ============================================================
 
 export const updateExerciseAssignment = asyncHandler(
-    async (req: Request, res: Response) => {
-        const { taskId } = req.params;
+        async (req: Request, res: Response) => {
+                const { taskId } = req.params;
 
-        const {
-            completed,
-            scheduledTime,
-            priority,
-        } = req.body;
+                const {
+                        completed,
+                        scheduledTime,
+                        priority,
+                } = req.body;
 
-        // ----------------------------------------------------
-        // Find exercise task
-        // ----------------------------------------------------
+                const task = await Task.findOne({
+                        _id: taskId,
+                        type: "exercise",
+                });
 
-        const task =
-            await Task.findOne({
-                _id: taskId,
-                type: "exercise",
-            });
+                if (!task) {
+                        throw new ApiError(
+                                "Exercise task not found",
+                                404
+                        );
+                }
 
-        if (!task) {
-            throw new ApiError(
-                "Exercise task not found",
-                404
-            );
+                const wasCompleted = task.completed;
+
+                if (completed !== undefined) {
+                        task.completed = completed;
+
+                        if (completed) {
+                                task.completedAt = new Date();
+                        } else {
+                                task.completedAt = undefined;
+                        }
+                }
+
+                if (scheduledTime) {
+                        task.scheduledTime = new Date(scheduledTime);
+                }
+
+                if (priority) {
+                        task.priority = priority;
+                }
+
+                await task.save();
+
+                // ------------------------------------------------
+                // Create next daily occurrence
+                // ------------------------------------------------
+                if (
+                        completed === true &&
+                        wasCompleted === false &&
+                        task.recurring?.enabled === true &&
+                        task.recurring.frequency === "daily"
+                ) {
+                        const nextScheduledTime = new Date(
+                                task.scheduledTime
+                        );
+
+                        nextScheduledTime.setDate(
+                                nextScheduledTime.getDate() + 1
+                        );
+
+                        const endDate = task.recurring.endDate
+                                ? new Date(task.recurring.endDate)
+                                : null;
+
+                        const allowedToCreateNext =
+                                !endDate ||
+                                nextScheduledTime.getTime() <=
+                                        endDate.getTime();
+
+                        if (allowedToCreateNext) {
+                                const existingNextTask =
+                                        await Task.findOne({
+                                                patientId: task.patientId,
+                                                type: "exercise",
+                                                exerciseId: task.exerciseId,
+                                                scheduledTime: nextScheduledTime,
+                                        });
+
+                                if (!existingNextTask) {
+                                        await Task.create({
+                                                patientId: task.patientId,
+                                                title: task.title,
+                                                description: task.description,
+                                                type: "exercise",
+                                                exerciseId: task.exerciseId,
+                                                scheduledTime:
+                                                        nextScheduledTime,
+                                                completed: false,
+                                                priority: task.priority,
+                                                recurring: task.recurring,
+                                        });
+                                }
+                        }
+                }
+
+                const populatedTask = await Task.findById(
+                        task._id
+                ).populate("exerciseId");
+
+                return res.sendResponse({
+                        statusCode: 200,
+                        success: true,
+                        message:
+                                "Exercise assignment updated successfully",
+                        data: populatedTask,
+                });
         }
-
-        // ----------------------------------------------------
-        // Update completed
-        // ----------------------------------------------------
-
-        if (completed !== undefined) {
-            task.completed = completed;
-
-            if (completed) {
-                task.completedAt = new Date();
-            } else {
-                task.completedAt = undefined;
-            }
-        }
-
-        // ----------------------------------------------------
-        // Update scheduled time
-        // ----------------------------------------------------
-
-        if (scheduledTime) {
-            task.scheduledTime =
-                new Date(scheduledTime);
-        }
-
-        // ----------------------------------------------------
-        // Update priority
-        // ----------------------------------------------------
-
-        if (priority) {
-            task.priority = priority;
-        }
-
-        await task.save();
-
-        // ----------------------------------------------------
-        // Populate exercise
-        // ----------------------------------------------------
-
-        const populatedTask =
-            await Task.findById(task._id)
-                .populate("exerciseId");
-
-        return res.sendResponse({
-            statusCode: 200,
-            success: true,
-            message:
-                "Exercise assignment updated successfully",
-            data: populatedTask,
-        });
-    }
 );
 
 // ============================================================

@@ -4,23 +4,50 @@ import { ApiError } from "../utils/apiError.js";
 import { validateRequest } from "../utils/validation.js";
 import mongoose from "mongoose";
 import { getIO } from "../socket.js";
-import { AccessToken, RoomServiceClient } from "livekit-server-sdk";
+import {
+	AccessToken,
+	RoomServiceClient,
+} from "livekit-server-sdk";
 import Patient from "../models/Patient.js";
 import Doctor from "../models/Doctor.js";
 import VideoCall from "../models/VideoCall.js";
 
-// Simple in-memory store for video call sessions (use Redis in production)
-const activeCallSessions = new Map<
-	string,
-	{
-		roomId: string;
-		participants: string[];
-		startedAt: Date;
-		status: "waiting" | "active" | "ended";
-	}
->();
+// ============================================================
+// Helpers
+// ============================================================
 
-// Create a video call room
+const getLiveKitConfig = () => {
+	const LIVEKIT_API_KEY =
+		process.env.LIVEKIT_API_KEY;
+
+	const LIVEKIT_API_SECRET =
+		process.env.LIVEKIT_API_SECRET;
+
+	const LIVEKIT_URL =
+		process.env.LIVEKIT_URL;
+
+	if (
+		!LIVEKIT_API_KEY ||
+		!LIVEKIT_API_SECRET ||
+		!LIVEKIT_URL
+	) {
+		throw new ApiError(
+			"Video calling is not configured",
+			500
+		);
+	}
+
+	return {
+		LIVEKIT_API_KEY,
+		LIVEKIT_API_SECRET,
+		LIVEKIT_URL,
+	};
+};
+
+// ============================================================
+// Create video call room
+// ============================================================
+
 export const createCallRoom = asyncHandler(
 	async (req: Request, res: Response) => {
 		const { participantId } = req.body;
@@ -29,293 +56,1011 @@ export const createCallRoom = asyncHandler(
 			{
 				field: "participantId",
 				value: participantId,
-				rules: { required: true, type: "string" },
+				rules: {
+					required: true,
+					type: "string",
+				},
 			},
 		]);
 
-		const userId = req.user?.id;
-		if (!userId) {
-			throw new ApiError("Unauthorized", 401);
+		const doctorUserId = req.user?.id;
+
+		if (!doctorUserId) {
+			throw new ApiError(
+				"Unauthorized",
+				401
+			);
 		}
 
-		if (req.user?.role !== "doctor") {
-			throw new ApiError("Only doctors can initiate video calls", 403);
+		if (
+			req.user?.role !== "doctor"
+		) {
+			throw new ApiError(
+				"Only doctors can initiate video calls",
+				403
+			);
 		}
 
-		const LIVEKIT_API_KEY = process.env.LIVEKIT_API_KEY;
-		const LIVEKIT_API_SECRET = process.env.LIVEKIT_API_SECRET;
-		const LIVEKIT_URL = process.env.LIVEKIT_URL;
-
-		if (!LIVEKIT_API_KEY || !LIVEKIT_API_SECRET || !LIVEKIT_URL) {
-			throw new ApiError("Video calling is not configured", 500);
+		if (
+			!mongoose.Types.ObjectId.isValid(
+				doctorUserId
+			) ||
+			!mongoose.Types.ObjectId.isValid(
+				participantId
+			)
+		) {
+			throw new ApiError(
+				"Invalid user ID",
+				400
+			);
 		}
 
-		// Use a deterministic room name so frontend URLs stay in sync
-		const roomId = `room-${userId}-${participantId}-${Date.now()}`;
-
-		// Initialize LiveKit RoomService client
-		const roomService = new RoomServiceClient(
-			LIVEKIT_URL,
+		const {
 			LIVEKIT_API_KEY,
-			LIVEKIT_API_SECRET
+			LIVEKIT_API_SECRET,
+			LIVEKIT_URL,
+		} = getLiveKitConfig();
+
+		// --------------------------------------------------------
+		// Find doctor and patient
+		// --------------------------------------------------------
+
+		const [doctor, patient] =
+			await Promise.all([
+				Doctor.findOne({
+					userId: doctorUserId,
+				}),
+
+				Patient.findOne({
+					userId: participantId,
+				}),
+			]);
+
+		if (!doctor) {
+			throw new ApiError(
+				"Doctor profile not found",
+				404
+			);
+		}
+
+		if (!patient) {
+			throw new ApiError(
+				"Patient profile not found",
+				404
+			);
+		}
+
+		// --------------------------------------------------------
+		// LiveKit room service
+		// --------------------------------------------------------
+
+		const roomService =
+			new RoomServiceClient(
+				LIVEKIT_URL,
+				LIVEKIT_API_KEY,
+				LIVEKIT_API_SECRET
+			);
+
+		// --------------------------------------------------------
+		// Cancel stale ringing calls
+		// --------------------------------------------------------
+
+		const staleRingingTime =
+			new Date(
+				Date.now() -
+					5 * 60 * 1000
+			);
+
+		await VideoCall.updateMany(
+			{
+				doctorUserId:
+					new mongoose.Types.ObjectId(
+						doctorUserId
+					),
+
+				patientUserId:
+					new mongoose.Types.ObjectId(
+						participantId
+					),
+
+				status: "ringing",
+
+				createdAt: {
+					$lt: staleRingingTime,
+				},
+			},
+			{
+				$set: {
+					status: "cancelled",
+					endTime: new Date(),
+					duration: 0,
+				},
+			}
 		);
 
+		// --------------------------------------------------------
+		// Check existing connected call
+		// --------------------------------------------------------
+
+		const activeCall =
+			await VideoCall.findOne({
+				doctorUserId:
+					new mongoose.Types.ObjectId(
+						doctorUserId
+					),
+
+				patientUserId:
+					new mongoose.Types.ObjectId(
+						participantId
+					),
+
+				status: "connected",
+			}).sort({
+				createdAt: -1,
+			});
+
+		if (activeCall) {
+			let liveParticipants: any[] = [];
+
+			try {
+				liveParticipants =
+					await roomService.listParticipants(
+						activeCall.roomId
+					);
+			} catch (error) {
+				console.error(
+					"Could not inspect existing LiveKit room:",
+					error
+				);
+
+				liveParticipants = [];
+			}
+
+			const doctorStillInRoom =
+				liveParticipants.some(
+					(participant) =>
+						participant.identity ===
+						doctorUserId
+				);
+
+			const patientStillInRoom =
+				liveParticipants.some(
+					(participant) =>
+						participant.identity ===
+						participantId
+				);
+
+			// ----------------------------------------------------
+			// Nobody is actually in the room
+			// ----------------------------------------------------
+
+			if (
+				!doctorStillInRoom &&
+				!patientStillInRoom
+			) {
+				activeCall.status =
+					"cancelled";
+
+				activeCall.endTime =
+					new Date();
+
+				activeCall.duration =
+					activeCall.startTime
+						? Math.max(
+								0,
+								Math.floor(
+									(
+										Date.now() -
+										activeCall.startTime.getTime()
+									) /
+										1000
+								)
+							)
+						: 0;
+
+				await activeCall.save();
+
+				try {
+					await roomService.deleteRoom(
+						activeCall.roomId
+					);
+				} catch {
+					// Room may already be gone
+				}
+			}
+			// ----------------------------------------------------
+			// Participants still in room
+			// ----------------------------------------------------
+			else {
+				throw new ApiError(
+					"A video call is already connected with this patient",
+					409
+				);
+			}
+		}
+
+		// --------------------------------------------------------
+		// Check recent ringing call
+		// --------------------------------------------------------
+
+		const recentRingingCall =
+			await VideoCall.findOne({
+				doctorUserId:
+					new mongoose.Types.ObjectId(
+						doctorUserId
+					),
+
+				patientUserId:
+					new mongoose.Types.ObjectId(
+						participantId
+					),
+
+				status: "ringing",
+
+				createdAt: {
+					$gte: staleRingingTime,
+				},
+			}).sort({
+				createdAt: -1,
+			});
+
+		if (recentRingingCall) {
+			// Try to determine whether the old room
+			// is actually still being used.
+			let ringingParticipants: any[] = [];
+
+			try {
+				ringingParticipants =
+					await roomService.listParticipants(
+						recentRingingCall.roomId
+					);
+			} catch {
+				ringingParticipants =
+					[];
+			}
+
+			// If the old ringing room is empty,
+			// cancel it and allow a new call.
+			if (
+				ringingParticipants.length === 0
+			) {
+				recentRingingCall.status =
+					"cancelled";
+
+				recentRingingCall.endTime =
+					new Date();
+
+				recentRingingCall.duration =
+					0;
+
+				await recentRingingCall.save();
+
+				try {
+					await roomService.deleteRoom(
+						recentRingingCall.roomId
+					);
+				} catch {
+					// Ignore room deletion errors
+				}
+			} else {
+				throw new ApiError(
+					"A video call is already ringing for this patient. Please wait or cancel the existing call.",
+					409
+				);
+			}
+		}
+
+		// --------------------------------------------------------
+		// Create unique LiveKit room
+		// --------------------------------------------------------
+
+		const roomId =
+			`room-${doctorUserId}-${participantId}-${Date.now()}`;
+
 		try {
-			// Create room in LiveKit (idempotent if room already exists)
 			await roomService.createRoom({
 				name: roomId,
-				emptyTimeout: 5 * 60, // seconds before room is auto-deleted when empty
+				emptyTimeout: 5 * 60,
 				maxParticipants: 2,
 			});
 		} catch (error) {
-			// If room already exists or any non-fatal error, we proceed; otherwise, surface configuration issue
-			// eslint-disable-next-line no-console
-			console.error("Failed to create LiveKit room", error);
+			console.error(
+				"Failed to create LiveKit room:",
+				error
+			);
+
+			throw new ApiError(
+				"Failed to create video call room",
+				500
+			);
 		}
 
-		// Create call session in memory for authorization & status tracking
-		activeCallSessions.set(roomId, {
-			roomId,
-			participants: [userId, participantId],
-			startedAt: new Date(),
-			status: "waiting",
-		});
+		// --------------------------------------------------------
+		// Save call in MongoDB
+		// --------------------------------------------------------
 
-		// Generate LiveKit access token for the doctor (caller)
-		const doctorToken = new AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, {
-			identity: userId.toString(),
-			name: req.user?.name,
-		});
+		const videoCall =
+			await VideoCall.create({
+				patientId:
+					patient._id,
+
+				DoctorId:
+					doctor._id,
+
+				doctorUserId:
+					new mongoose.Types.ObjectId(
+						doctorUserId
+					),
+
+				patientUserId:
+					new mongoose.Types.ObjectId(
+						participantId
+					),
+
+				roomId,
+
+				status: "ringing",
+
+				callType: "video",
+
+				startTime: undefined,
+			});
+
+		// --------------------------------------------------------
+		// Generate doctor's LiveKit token
+		// --------------------------------------------------------
+
+		const doctorToken =
+			new AccessToken(
+				LIVEKIT_API_KEY,
+				LIVEKIT_API_SECRET,
+				{
+					identity:
+						doctorUserId.toString(),
+
+					name:
+						req.user?.name ||
+						"Doctor",
+				}
+			);
+
 		doctorToken.addGrant({
 			roomJoin: true,
 			room: roomId,
 			canPublish: true,
 			canSubscribe: true,
 		});
-		const doctorJwt = await doctorToken.toJwt();
+
+		const doctorJwt =
+			await doctorToken.toJwt();
+
+		// --------------------------------------------------------
+		// Notify patient
+		// --------------------------------------------------------
 
 		try {
 			const io = getIO();
-			io.to(participantId.toString()).emit("video:incoming", {
-				roomId,
-				fromUserId: userId,
-				fromName: req.user?.name,
-			});
+
+			io.to(
+				participantId.toString()
+			).emit(
+				"video:incoming",
+				{
+					roomId,
+
+					fromUserId:
+						doctorUserId,
+
+					fromName:
+						req.user?.name ||
+						"Your doctor",
+				}
+			);
 		} catch (error) {
-			// Socket server might not be initialized; ignore errors here
+			console.error(
+				"Failed to send incoming video call notification:",
+				error
+			);
 		}
 
 		return res.sendResponse({
 			statusCode: 201,
+
 			success: true,
-			message: "Video call room created successfully",
+
+			message:
+				"Video call room created successfully",
+
 			data: {
 				roomId,
-				participants: [userId, participantId],
-				// LiveKit connection details for the caller (doctor)
-				token: doctorJwt,
-				serverUrl: LIVEKIT_URL,
+
+				callId:
+					videoCall._id,
+
+				participants: [
+					doctorUserId,
+					participantId,
+				],
+
+				token:
+					doctorJwt,
+
+				serverUrl:
+					LIVEKIT_URL,
 			},
 		});
 	}
 );
 
-// Join a video call room
-export const joinCallRoom = asyncHandler(
-	async (req: Request, res: Response) => {
-		const { roomId } = req.params;
+// ============================================================
+// Join video call
+// ============================================================
 
-		const session = activeCallSessions.get(roomId);
-		if (!session) {
-			throw new ApiError("Call room not found or expired", 404);
+export const joinCallRoom =
+	asyncHandler(
+		async (
+			req: Request,
+			res: Response
+		) => {
+			const { roomId } =
+				req.params;
+
+			if (!roomId) {
+				throw new ApiError(
+					"Room ID is required",
+					400
+				);
+			}
+
+			const userId =
+				req.user?.id;
+
+			if (!userId) {
+				throw new ApiError(
+					"Unauthorized",
+					401
+				);
+			}
+
+			if (
+				!mongoose.Types.ObjectId.isValid(
+					userId
+				)
+			) {
+				throw new ApiError(
+					"Invalid user ID",
+					400
+				);
+			}
+
+			const videoCall =
+				await VideoCall.findOne({
+					roomId,
+				});
+
+			if (!videoCall) {
+				throw new ApiError(
+					"Call room not found or expired",
+					404
+				);
+			}
+
+			// ----------------------------------------------------
+			// Check participant
+			// ----------------------------------------------------
+
+			const isDoctor =
+				videoCall.doctorUserId.toString() ===
+				userId.toString();
+
+			const isPatient =
+				videoCall.patientUserId.toString() ===
+				userId.toString();
+
+			if (
+				!isDoctor &&
+				!isPatient
+			) {
+				throw new ApiError(
+					"Not authorized to join this call",
+					403
+				);
+			}
+
+			// ----------------------------------------------------
+			// Check status
+			// ----------------------------------------------------
+
+			if (
+				videoCall.status ===
+					"completed" ||
+				videoCall.status ===
+					"cancelled"
+			) {
+				throw new ApiError(
+					"Call has already ended",
+					410
+				);
+			}
+
+			const {
+				LIVEKIT_API_KEY,
+				LIVEKIT_API_SECRET,
+				LIVEKIT_URL,
+			} = getLiveKitConfig();
+
+			// ----------------------------------------------------
+			// Patient accepts call
+			// ----------------------------------------------------
+
+			if (isPatient) {
+				if (
+					videoCall.status ===
+					"ringing"
+				) {
+					videoCall.status =
+						"connected";
+
+					videoCall.startTime =
+						new Date();
+
+					await videoCall.save();
+
+					try {
+						const io =
+							getIO();
+
+						io.to(
+							videoCall.doctorUserId.toString()
+						).emit(
+							"video:accepted",
+							{
+								roomId,
+
+								userId,
+							}
+						);
+					} catch (error) {
+						console.error(
+							"Failed to send video accepted event:",
+							error
+						);
+					}
+				}
+			}
+
+			// ----------------------------------------------------
+			// Generate LiveKit token
+			// ----------------------------------------------------
+
+			const token =
+				new AccessToken(
+					LIVEKIT_API_KEY,
+					LIVEKIT_API_SECRET,
+					{
+						identity:
+							userId.toString(),
+
+						name:
+							req.user?.name ||
+							"User",
+					}
+				);
+
+			token.addGrant({
+				roomJoin: true,
+				room: roomId,
+				canPublish: true,
+				canSubscribe: true,
+			});
+
+			const jwt =
+				await token.toJwt();
+
+			return res.sendResponse({
+				statusCode: 200,
+
+				success: true,
+
+				message:
+					"Joined video call room successfully",
+
+				data: {
+					roomId:
+						videoCall.roomId,
+
+					participants: [
+						videoCall.doctorUserId.toString(),
+						videoCall.patientUserId.toString(),
+					],
+
+					status:
+						videoCall.status,
+
+					token:
+						jwt,
+
+					serverUrl:
+						LIVEKIT_URL,
+				},
+			});
 		}
+	);
 
-		const userId = req.user?.id;
-		if (!userId) {
-			throw new ApiError("Unauthorized", 401);
-		}
-
-		// Check if user is a participant
-		if (!session.participants.includes(userId)) {
-			throw new ApiError("Not authorized to join this call", 403);
-		}
-
-		const LIVEKIT_API_KEY = process.env.LIVEKIT_API_KEY;
-		const LIVEKIT_API_SECRET = process.env.LIVEKIT_API_SECRET;
-		const LIVEKIT_URL = process.env.LIVEKIT_URL;
-
-		if (!LIVEKIT_API_KEY || !LIVEKIT_API_SECRET || !LIVEKIT_URL) {
-			throw new ApiError("Video calling is not configured", 500);
-		}
-
-		// Update status to active
-		session.status = "active";
-
-		// Generate LiveKit access token for the joining user
-		const token = new AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, {
-			identity: userId.toString(),
-			name: req.user?.name,
-		});
-		token.addGrant({
-			roomJoin: true,
-			room: roomId,
-			canPublish: true,
-			canSubscribe: true,
-		});
-		const jwt = await token.toJwt();
-
-		return res.sendResponse({
-			statusCode: 200,
-			success: true,
-			message: "Joined video call room successfully",
-			data: {
-				roomId: session.roomId,
-				participants: session.participants,
-				status: session.status,
-				// LiveKit connection details
-				token: jwt,
-				serverUrl: LIVEKIT_URL,
-			},
-		});
-	}
-);
-
+// ============================================================
 // End video call
-export const endCall = asyncHandler(async (req: Request, res: Response) => {
-	const { roomId } = req.params;
+// ============================================================
 
-	const session = activeCallSessions.get(roomId);
-	if (!session) {
-		throw new ApiError("Call room not found", 404);
-	}
+export const endCall =
+	asyncHandler(
+		async (
+			req: Request,
+			res: Response
+		) => {
+			const { roomId } =
+				req.params;
 
-	const userId = req.user?.id;
-	if (!userId || !session.participants.includes(userId)) {
-		throw new ApiError("Unauthorized to end this call", 403);
-	}
+			const userId =
+				req.user?.id;
 
-	const previousStatus = session.status;
+			if (!userId) {
+				throw new ApiError(
+					"Unauthorized",
+					401
+				);
+			}
 
-	// Mark as ended
-	session.status = "ended";
+			if (!roomId) {
+				throw new ApiError(
+					"Room ID is required",
+					400
+				);
+			}
 
-	try {
-		const io = getIO();
-		for (const participantId of session.participants) {
-			io.to(participantId.toString()).emit("video:ended", {
-				roomId,
+			const videoCall =
+				await VideoCall.findOne({
+					roomId,
+				});
+
+			if (!videoCall) {
+				throw new ApiError(
+					"Call room not found",
+					404
+				);
+			}
+
+			const isParticipant =
+				videoCall.doctorUserId.toString() ===
+					userId.toString() ||
+				videoCall.patientUserId.toString() ===
+					userId.toString();
+
+			if (!isParticipant) {
+				throw new ApiError(
+					"Unauthorized to end this call",
+					403
+				);
+			}
+
+			// Already ended
+			if (
+				videoCall.status ===
+					"completed" ||
+				videoCall.status ===
+					"cancelled"
+			) {
+				return res.sendResponse({
+					statusCode: 200,
+
+					success: true,
+
+					message:
+						"Video call already ended",
+
+					data: {
+						roomId,
+
+						duration:
+							videoCall.duration ||
+							0,
+
+						status:
+							videoCall.status,
+					},
+				});
+			}
+
+			const previousStatus =
+				videoCall.status;
+
+			const endTime =
+				new Date();
+
+			// ----------------------------------------------------
+			// Calculate duration
+			// ----------------------------------------------------
+
+			if (
+				videoCall.startTime &&
+				previousStatus ===
+					"connected"
+			) {
+				videoCall.duration =
+					Math.max(
+						0,
+						Math.floor(
+							(
+								endTime.getTime() -
+								videoCall.startTime.getTime()
+							) /
+								1000
+						)
+					);
+			} else {
+				videoCall.duration =
+					0;
+			}
+
+			videoCall.endTime =
+				endTime;
+
+			videoCall.status =
+				previousStatus ===
+					"connected"
+					? "completed"
+					: "cancelled";
+
+			await videoCall.save();
+
+			// ----------------------------------------------------
+			// Notify doctor
+			// ----------------------------------------------------
+
+			try {
+				const io =
+					getIO();
+
+				io.to(
+					videoCall.doctorUserId.toString()
+				).emit(
+					"video:ended",
+					{
+						roomId,
+					}
+				);
+
+				io.to(
+					videoCall.patientUserId.toString()
+				).emit(
+					"video:ended",
+					{
+						roomId,
+					}
+				);
+			} catch (error) {
+				console.error(
+					"Failed to send video ended event:",
+					error
+				);
+			}
+
+			// ----------------------------------------------------
+			// Delete LiveKit room
+			// ----------------------------------------------------
+
+			try {
+				const {
+					LIVEKIT_API_KEY,
+					LIVEKIT_API_SECRET,
+					LIVEKIT_URL,
+				} = getLiveKitConfig();
+
+				const roomService =
+					new RoomServiceClient(
+						LIVEKIT_URL,
+						LIVEKIT_API_KEY,
+						LIVEKIT_API_SECRET
+					);
+
+				await roomService.deleteRoom(
+					roomId
+				);
+			} catch (error) {
+				console.error(
+					"Failed to delete LiveKit room:",
+					error
+				);
+			}
+
+			return res.sendResponse({
+				statusCode: 200,
+
+				success: true,
+
+				message:
+					"Video call ended successfully",
+
+				data: {
+					roomId,
+
+					duration:
+						videoCall.duration ||
+						0,
+
+					status:
+						videoCall.status,
+				},
 			});
 		}
-	} catch (error) {
-		// Ignore socket errors
-	}
+	);
 
-	// Persist video consultation history (non-blocking for the main flow)
-	try {
-		const participantObjectIds = session.participants.map(
-				(id) => new mongoose.Types.ObjectId(id)
-			);
+// ============================================================
+// Get call session
+// ============================================================
 
-		const [doctor, patient] = await Promise.all([
-			Doctor.findOne({ userId: { $in: participantObjectIds } }),
-			Patient.findOne({ userId: { $in: participantObjectIds } }),
-		]);
+export const getCallSession =
+	asyncHandler(
+		async (
+			req: Request,
+			res: Response
+		) => {
+			const { roomId } =
+				req.params;
 
-		if (doctor && patient) {
-			const startTime = session.startedAt;
-			const endTime = new Date();
-			const durationSeconds = Math.floor(
-				(endTime.getTime() - startTime.getTime()) / 1000
-			);
+			const userId =
+				req.user?.id;
 
-			await VideoCall.create({
-				patientId: patient._id,
-				DoctorId: doctor._id,
-				startTime,
-				endTime,
-				// duration stored in seconds for easier reporting
-				duration: durationSeconds,
-				status: previousStatus === "active" ? "completed" : "cancelled",
-				callType: "video",
+			if (!userId) {
+				throw new ApiError(
+					"Unauthorized",
+					401
+				);
+			}
+
+			const videoCall =
+				await VideoCall.findOne({
+					roomId,
+				});
+
+			if (!videoCall) {
+				throw new ApiError(
+					"Call room not found",
+					404
+				);
+			}
+
+			const isParticipant =
+				videoCall.doctorUserId.toString() ===
+					userId.toString() ||
+				videoCall.patientUserId.toString() ===
+					userId.toString();
+
+			if (!isParticipant) {
+				throw new ApiError(
+					"Unauthorized",
+					403
+				);
+			}
+
+			return res.sendResponse({
+				statusCode: 200,
+
+				success: true,
+
+				message:
+					"Call session retrieved successfully",
+
+				data: {
+					roomId:
+						videoCall.roomId,
+
+					participants: [
+						videoCall.doctorUserId.toString(),
+						videoCall.patientUserId.toString(),
+					],
+
+					status:
+						videoCall.status,
+
+					startedAt:
+						videoCall.startTime,
+
+					endedAt:
+						videoCall.endTime,
+				},
 			});
 		}
-	} catch (error) {
-		// eslint-disable-next-line no-console
-		console.error("Failed to save video consultation record", error);
-	}
+	);
 
-	// Remove from active sessions after 5 minutes
-	setTimeout(() => {
-		activeCallSessions.delete(roomId);
-	}, 5 * 60 * 1000);
+// ============================================================
+// Get consultation history
+// ============================================================
 
-	return res.sendResponse({
-		statusCode: 200,
-		success: true,
-		message: "Video call ended successfully",
-		data: {
-			roomId,
-			duration: Date.now() - session.startedAt.getTime(),
-		},
-	});
-});
+export const getConsultationsForPatient =
+	asyncHandler(
+		async (
+			req: Request,
+			res: Response
+		) => {
+			const doctorUserId =
+				req.user?.id;
 
-// Get call session details
-export const getCallSession = asyncHandler(
-	async (req: Request, res: Response) => {
-		const { roomId } = req.params;
+			const { patientId } =
+				req.params;
 
-		const session = activeCallSessions.get(roomId);
-		if (!session) {
-			throw new ApiError("Call room not found", 404);
+			if (!doctorUserId) {
+				throw new ApiError(
+					"Unauthorized",
+					401
+				);
+			}
+
+			if (
+				!mongoose.Types.ObjectId.isValid(
+					patientId
+				)
+			) {
+				throw new ApiError(
+					"Invalid patient ID",
+					400
+				);
+			}
+
+			const [
+				doctor,
+				patient,
+			] = await Promise.all([
+				Doctor.findOne({
+					userId:
+						doctorUserId,
+				}),
+
+				Patient.findById(
+					patientId
+				),
+			]);
+
+			if (
+				!doctor ||
+				!patient
+			) {
+				throw new ApiError(
+					"Doctor or patient not found",
+					404
+				);
+			}
+
+			const consultations =
+				await VideoCall.find({
+					patientId:
+						patient._id,
+
+					DoctorId:
+						doctor._id,
+
+					status: {
+						$in: [
+							"completed",
+							"cancelled",
+						],
+					},
+				})
+					.sort({
+						startTime: -1,
+					})
+					.limit(50);
+
+			return res.sendResponse({
+				statusCode: 200,
+
+				success: true,
+
+				message:
+					"Video consultations retrieved successfully",
+
+				data: {
+					consultations,
+				},
+			});
 		}
-
-		return res.sendResponse({
-			statusCode: 200,
-			success: true,
-			message: "Call session retrieved successfully",
-			data: session,
-		});
-	}
-);
-
-// Get video consultation history for a patient for the logged-in doctor
-export const getConsultationsForPatient = asyncHandler(
-	async (req: Request, res: Response) => {
-		const doctorUserId = req.user?.id;
-		const { patientId } = req.params;
-
-		if (!doctorUserId) {
-			throw new ApiError("Unauthorized", 401);
-		}
-
-		if (!mongoose.Types.ObjectId.isValid(patientId)) {
-			throw new ApiError("Invalid patient ID", 400);
-		}
-
-		const [doctor, patient] = await Promise.all([
-			Doctor.findOne({ userId: doctorUserId }),
-			Patient.findById(patientId),
-		]);
-
-		if (!doctor || !patient) {
-			throw new ApiError("Doctor or patient not found", 404);
-		}
-
-		const consultations = await VideoCall.find({
-			patientId: patient._id,
-			DoctorId: doctor._id,
-		})
-			.sort({ startTime: -1 })
-			.limit(50);
-
-		return res.sendResponse({
-			statusCode: 200,
-			success: true,
-			message: "Video consultations retrieved successfully",
-			data: {
-				consultations,
-			},
-		});
-	}
-);
+	);

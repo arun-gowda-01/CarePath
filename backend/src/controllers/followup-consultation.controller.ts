@@ -240,3 +240,48 @@ export const deleteFollowUpConsultation = asyncHandler(
 	}
 );
 
+// Get follow-up consultations for the currently logged-in patient
+export const getMyFollowUpConsultations = asyncHandler(
+	async (req: Request, res: Response) => {
+		const userId = req.user?.id;
+
+		if (!userId) {
+			throw new ApiError("Unauthorized", 401);
+		}
+
+		const patient = await Patient.findOne({
+			userId,
+		});
+
+		if (!patient) {
+			throw new ApiError(
+				"Patient profile not found",
+				404
+			);
+		}
+
+		const followUps =
+			await FollowUpConsultation.find({
+				patientId: patient._id,
+			})
+				.populate(
+					"doctorId",
+					"userId"
+				)
+				.populate(
+					"doctorId.userId",
+					"firstName lastName"
+				)
+				.sort({
+					scheduledTime: 1,
+				});
+
+		return res.sendResponse({
+			statusCode: 200,
+			success: true,
+			message:
+				"Your follow-up consultations retrieved successfully",
+			data: followUps,
+		});
+	}
+);

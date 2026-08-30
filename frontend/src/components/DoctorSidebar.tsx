@@ -1,6 +1,10 @@
 import { useAuth } from "@/context/AuthContext";
 import axios from "axios";
-import { NavLink, useNavigate } from "react-router";
+import {
+	NavLink,
+	useLocation,
+	useNavigate,
+} from "react-router";
 import { toast } from "sonner";
 
 import {
@@ -14,6 +18,7 @@ import {
 	AlertDialogTitle,
 	AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+
 import { Button } from "./ui/button";
 import { LogOut } from "lucide-react";
 
@@ -28,34 +33,58 @@ function DoctorSidebar({
 }: DoctorSidebarProps) {
 	const { setUser } = useAuth();
 	const navigate = useNavigate();
+	const location = useLocation();
 
 	const doctorRoutes = [
 		"dashboard",
 		"patient-profile",
 		"alerts",
 		"analytics",
+		"profile",
 	];
 
 	const formatLabel = (route: string) => {
 		return route
 			.split("-")
-			.map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+			.map(
+				(word) =>
+					word.charAt(0).toUpperCase() +
+					word.slice(1)
+			)
 			.join(" ");
 	};
+
+	const isPatientProfileActive =
+		location.pathname.startsWith(
+			"/doctor/patient-profile/"
+		);
 
 	const handleLogout = async () => {
 		try {
 			await axios.post(
 				`${import.meta.env.VITE_BACKEND_URL}/auth/logout`,
 				{},
-				{ withCredentials: true }
+				{
+					withCredentials: true,
+				}
 			);
+
 			setUser(null);
-			toast.success("Logged out successfully");
+
+			toast.success(
+				"Logged out successfully"
+			);
+
 			navigate("/login");
 		} catch (error) {
-			console.error("Logout failed:", error);
-			toast.error("Logout failed");
+			console.error(
+				"Logout failed:",
+				error
+			);
+
+			toast.error(
+				"Logout failed"
+			);
 		}
 	};
 
@@ -63,10 +92,16 @@ function DoctorSidebar({
 		<>
 			{/* Mobile Menu Button */}
 			<button
-				onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+				onClick={() =>
+					setMobileMenuOpen(
+						!mobileMenuOpen
+					)
+				}
 				className="md:hidden fixed top-4 left-4 z-50 p-2 hover:bg-muted rounded-lg"
 			>
-				<span className="text-2xl">☰</span>
+				<span className="text-2xl">
+					☰
+				</span>
 			</button>
 
 			{/* Sidebar */}
@@ -84,61 +119,104 @@ function DoctorSidebar({
 							alt=""
 							className="w-10 rounded-xl"
 						/>
+
 						<span className="text-2xl font-bold text-gray-900">
 							CarePath
 						</span>
 					</h1>
 
 					<nav className="space-y-2">
-						{doctorRoutes.map((route) => (
-							<NavLink
-								key={route}
-								to={`/doctor/${route}`}
-								onClick={(e) => {
-									if (route === "patient-profile")
-										e.preventDefault();
-									setMobileMenuOpen(false);
-								}}
-								className={({ isActive }) =>
-									`w-full text-left px-4 py-2 rounded-lg transition-colors ${
-										route === "patient-profile"
-											? "cursor-not-allowed"
-											: " "
-									} relative block ${
-										isActive
-											? "bg-sidebar-primary text-sidebar-primary-foreground"
-											: "text-sidebar-foreground hover:bg-sidebar-accent/20"
-									}`
-								}
-							>
-								<span className="flex items-center justify-between">
-									{formatLabel(route)}
-								</span>
-							</NavLink>
-						))}
+						{doctorRoutes.map(
+							(route) => {
+								const isPatientProfile =
+									route ===
+									"patient-profile";
+
+								const isActive =
+									isPatientProfile
+										? isPatientProfileActive
+										: location.pathname ===
+											`/doctor/${route}`;
+
+								return (
+									<NavLink
+										key={
+											route
+										}
+										to={
+											isPatientProfile
+												? "#"
+												: `/doctor/${route}`
+										}
+										onClick={(
+											e
+										) => {
+											if (
+												isPatientProfile
+											) {
+												e.preventDefault();
+												return;
+											}
+
+											setMobileMenuOpen(
+												false
+											);
+										}}
+										className={`w-full text-left px-4 py-2 rounded-lg transition-colors relative block ${
+											isActive
+												? "bg-sidebar-primary text-sidebar-primary-foreground"
+												: isPatientProfile
+													? "text-sidebar-foreground"
+													: "text-sidebar-foreground hover:bg-sidebar-accent/20"
+										}`}
+									>
+										<span className="flex items-center justify-between">
+											{formatLabel(
+												route
+											)}
+										</span>
+									</NavLink>
+								);
+							}
+						)}
 					</nav>
 				</div>
 
+				{/* Logout */}
 				<AlertDialog>
-					<AlertDialogTrigger asChild>
-						<Button variant="outline" className="w-full">
+					<AlertDialogTrigger
+						asChild
+					>
+						<Button
+							variant="outline"
+							className="w-full"
+						>
 							<LogOut className="mr-2 h-4 w-4" />
+
 							Logout
 						</Button>
 					</AlertDialogTrigger>
+
 					<AlertDialogContent>
 						<AlertDialogHeader>
 							<AlertDialogTitle>
 								Are you sure you want to logout?
 							</AlertDialogTitle>
+
 							<AlertDialogDescription>
 								You will be redirected to the login page.
 							</AlertDialogDescription>
 						</AlertDialogHeader>
+
 						<AlertDialogFooter>
-							<AlertDialogCancel>Cancel</AlertDialogCancel>
+							<AlertDialogCancel>
+								Cancel
+							</AlertDialogCancel>
+
 							<AlertDialogAction
-								onClick={handleLogout}
+								onClick={
+									handleLogout
+								}
 								className="bg-red-600 hover:bg-red-500"
 							>
 								Logout
@@ -152,7 +230,11 @@ function DoctorSidebar({
 			{mobileMenuOpen && (
 				<div
 					className="fixed inset-0 bg-black/50 md:hidden z-30"
-					onClick={() => setMobileMenuOpen(false)}
+					onClick={() =>
+						setMobileMenuOpen(
+							false
+						)
+					}
 				/>
 			)}
 		</>

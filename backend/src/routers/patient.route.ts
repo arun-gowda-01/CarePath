@@ -22,6 +22,9 @@ import {
 	updateExerciseAssignment,
 } from "../controllers/exercise.controller.js";
 import upload from "../middlewares/upload.middleware.js";
+import {
+	getMyFollowUpConsultations,
+} from "../controllers/followup-consultation.controller.js";
 
 const router = Router();
 
@@ -30,6 +33,7 @@ router.post("/check-in", upload.single("woundImage"), submitSymptomCheckIn);
 router.get("/check-ins/:patientId", getPatientCheckIns);
 router.get("/check-in/:checkInId", getCheckInById);
 router.get("/recovery-trends/:patientId", getRecoveryTrends);
+router.get("/follow-ups", getMyFollowUpConsultations);
 
 // Tasks
 router.get("/tasks/:patientId", getPatientTasks);

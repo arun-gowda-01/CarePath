@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 
 export default function PlatformConfiguration() {
@@ -72,7 +71,6 @@ export default function PlatformConfiguration() {
 						<h2 className="text-xl font-semibold text-foreground">
 							Care Pathway Configuration
 						</h2>
-						<Button>Add New Pathway</Button>
 					</div>
 
 					<div className="space-y-3">
@@ -98,14 +96,6 @@ export default function PlatformConfiguration() {
 												: "Inactive"}
 										</span>
 									</div>
-									<div className="flex gap-2">
-										<Button size="sm" variant="outline">
-											Customize Flow
-										</Button>
-										<Button size="sm" variant="outline">
-											Edit
-										</Button>
-									</div>
 								</div>
 							</Card>
 						))}
@@ -127,7 +117,6 @@ export default function PlatformConfiguration() {
 						<h2 className="text-xl font-semibold text-foreground">
 							Alert Threshold Management
 						</h2>
-						<Button>Add New Threshold</Button>
 					</div>
 
 					<div className="space-y-3">
@@ -168,9 +157,6 @@ export default function PlatformConfiguration() {
 											</div>
 										</div>
 									</div>
-									<Button size="sm" variant="outline">
-										Edit Threshold
-									</Button>
 								</div>
 							</Card>
 						))}

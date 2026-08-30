@@ -99,7 +99,8 @@ export const patientApi = {
 		api.post(`/patient/medications/${medicationId}/take-dose`, {
 			timeOfDay,
 		}),
-
+	getMyFollowUpConsultations: () =>
+	api.get("/patient/follow-ups"),
 	// Analytics
 	getAnalytics: () => api.get("/patient/analytics"),
 

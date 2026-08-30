@@ -27,6 +27,7 @@ import PlatformConfiguration from "./pages/PlatformConfiguration.tsx";
 import NotFound from "./pages/NotFound.tsx";
 import AccessDenied from "./pages/AccessDenied.tsx";
 import VideoCall from "./pages/VideoCall.tsx";
+import DoctorProfileSettings from "./pages/DoctorProfileSettings.tsx";
 
 import { Toaster } from "./components/ui/sonner.tsx";
 import { AuthProvider } from "./context/AuthContext.tsx";
@@ -67,6 +68,7 @@ const router = createBrowserRouter([
 					},
 					{ path: "alerts", element: <Alerts /> },
 					{ path: "analytics", element: <Analytics /> },
+					{path: "profile",element: <DoctorProfileSettings />,},
 				],
 			},
 			{

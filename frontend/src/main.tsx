@@ -6,6 +6,7 @@ import { createBrowserRouter } from "react-router";
 import { RouterProvider } from "react-router/dom";
 
 // Pages and Layouts
+import AdminProfileSettings from "./pages/AdminProfileSettings.tsx";
 import Landing from "./pages/Landing.tsx";
 import Login from "./pages/Login.tsx";
 import PatientLayout from "./layouts/PatientLayout.tsx";
@@ -86,6 +87,10 @@ const router = createBrowserRouter([
 					{
 						path: "configuration",
 						element: <PlatformConfiguration />,
+					},
+					{
+						path: "profile",
+						element: <AdminProfileSettings />,
 					},
 				],
 			},

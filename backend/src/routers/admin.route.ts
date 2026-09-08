@@ -7,6 +7,7 @@ import {
 	seedPatients,
 	updatePatient,
 } from "../controllers/patient-management.controller.js";
+import { addAdmin } from "../controllers/admin-management.controller.js";
 import {
 	addDoctor,
 	deleteDoctor,
@@ -34,6 +35,7 @@ router.get("/doctor/:doctorId", getDoctorById);
 router.post("/doctor", addDoctor);
 router.patch("/doctor/:doctorId", updateDoctor);
 router.delete("/doctor/:doctorId", deleteDoctor);
+router.post("/admin", addAdmin);
 
 router.get("/assignments", getAllAssignments);
 router.post("/assignment", assignPatientToDoctor);

@@ -20,18 +20,12 @@
         "noFallthroughCasesInSwitch": true,
         "noUncheckedSideEffectImports": true,
 
-        
+        "baseUrl": ".",
         "paths": {
-            "@/*": ["./src/*"],
-            "@schemas/*": ["../backend/src/schemas/*"],
-            "@models/*": ["../backend/src/models/*"]
+            "@/*": ["./src/*"]
         },
 
         "noEmit": true
     },
-    "include": [
-        "src",
-        "../backend/src/schemas",
-        "../backend/src/models"
-    ]
+    "include": ["src"]
 }

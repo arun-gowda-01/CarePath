@@ -1,83 +1,212 @@
 import { Server as HttpServer } from "http";
-import { Server, Socket } from "socket.io";
+import {
+        Server,
+        Socket,
+} from "socket.io";
 import jwt from "jsonwebtoken";
 
 interface AuthUser {
-	id: string;
-	email: string;
-	role: string;
-	name: string;
+        id: string;
+        email: string;
+        role: string;
+        name: string;
 }
 
 let io: Server | null = null;
 
-const parseCookie = (cookieHeader: string): Record<string, string> => {
-	return cookieHeader.split(";").reduce((acc, part) => {
-		const [key, value] = part.split("=");
-		if (key && value) {
-			acc[key.trim()] = decodeURIComponent(value.trim());
-		}
-		return acc;
-	}, {} as Record<string, string>);
+// ------------------------------------------------------------
+// Allowed frontend origins
+// ------------------------------------------------------------
+
+const getAllowedOrigins = (): string[] => {
+        return [
+                process.env.FRONTEND_URL,
+                "http://localhost:5173",
+                "http://10.169.189.210:5173",
+        ].filter(
+                (origin): origin is string =>
+                        Boolean(origin)
+        );
 };
 
-export const initSocket = (server: HttpServer) => {
-	io = new Server(server, {
-		cors: {
-			origin: process.env.FRONTEND_URL,
-			credentials: true,
-		},
-	});
+// ------------------------------------------------------------
+// Cookie parser
+// ------------------------------------------------------------
 
-	io.use((socket: Socket, next) => {
-		try {
-			const cookieHeader = socket.handshake.headers.cookie;
-			if (!cookieHeader) {
-				return next(new Error("Unauthorized"));
-			}
+const parseCookie = (
+        cookieHeader: string
+): Record<string, string> => {
+        return cookieHeader
+                .split(";")
+                .reduce(
+                        (
+                                acc,
+                                part
+                        ) => {
+                                const [
+                                        key,
+                                        value,
+                                ] =
+                                        part.split(
+                                                "="
+                                        );
 
-			const cookies = parseCookie(cookieHeader);
-			const token = cookies["authToken"];
+                                if (
+                                        key &&
+                                        value
+                                ) {
+                                        acc[
+                                                key.trim()
+                                        ] =
+                                                decodeURIComponent(
+                                                        value.trim()
+                                                );
+                                }
 
-			if (!token) {
-				return next(new Error("Unauthorized"));
-			}
-
-			const decoded = jwt.verify(
-				token,
-				process.env.JWT_SECRET as string
-			) as jwt.JwtPayload;
-
-			(socket.data as { user?: AuthUser }).user = {
-				id: decoded.id as string,
-				email: decoded.email as string,
-				role: decoded.role as string,
-				name: decoded.name as string,
-			};
-
-			return next();
-		} catch (error) {
-			return next(new Error("Unauthorized"));
-		}
-	});
-
-	io.on("connection", (socket: Socket) => {
-		const user = (socket.data as { user?: AuthUser }).user;
-
-		if (!user) {
-			socket.disconnect(true);
-			return;
-		}
-
-		socket.join(user.id);
-	});
-
-	return io;
+                                return acc;
+                        },
+                        {} as Record<
+                                string,
+                                string
+                        >
+                );
 };
 
-export const getIO = (): Server => {
-	if (!io) {
-		throw new Error("Socket.io not initialized");
-	}
-	return io;
+// ------------------------------------------------------------
+// Initialize Socket.IO
+// ------------------------------------------------------------
+
+export const initSocket = (
+        server: HttpServer
+) => {
+        const allowedOrigins =
+                getAllowedOrigins();
+
+        io = new Server(server, {
+                cors: {
+                        origin:
+                                allowedOrigins,
+                        credentials: true,
+                },
+        });
+
+        // --------------------------------------------------------
+        // Socket authentication
+        // --------------------------------------------------------
+
+        io.use(
+                (
+                        socket: Socket,
+                        next
+                ) => {
+                        try {
+                                const cookieHeader =
+                                        socket
+                                                .handshake
+                                                .headers
+                                                .cookie;
+
+                                if (
+                                        !cookieHeader
+                                ) {
+                                        return next(
+                                                new Error(
+                                                        "Unauthorized"
+                                                )
+                                        );
+                                }
+
+                                const cookies =
+                                        parseCookie(
+                                                cookieHeader
+                                        );
+
+                                const token =
+                                        cookies[
+                                                "authToken"
+                                        ];
+
+                                if (
+                                        !token
+                                ) {
+                                        return next(
+                                                new Error(
+                                                        "Unauthorized"
+                                                )
+                                        );
+                                }
+
+                                const decoded =
+                                        jwt.verify(
+                                                token,
+                                                process.env
+                                                        .JWT_SECRET as string
+                                        ) as jwt.JwtPayload;
+
+                                (
+                                        socket.data as {
+                                                user?: AuthUser;
+                                        }
+                                ).user = {
+                                        id: decoded.id as string,
+                                        email: decoded.email as string,
+                                        role: decoded.role as string,
+                                        name: decoded.name as string,
+                                };
+
+                                return next();
+                        } catch {
+                                return next(
+                                        new Error(
+                                                "Unauthorized"
+                                        )
+                                );
+                        }
+                }
+        );
+
+        // --------------------------------------------------------
+        // Connection
+        // --------------------------------------------------------
+
+        io.on(
+                "connection",
+                (socket: Socket) => {
+                        const user = (
+                                socket.data as {
+                                        user?: AuthUser;
+                                }
+                        ).user;
+
+                        if (!user) {
+                                socket.disconnect(
+                                        true
+                                );
+                                return;
+                        }
+
+                        // Each authenticated user joins
+                        // their own room for targeted events.
+                        socket.join(
+                                user.id
+                        );
+                }
+        );
+
+        return io;
 };
+
+// ------------------------------------------------------------
+// Get Socket.IO instance
+// ------------------------------------------------------------
+
+export const getIO =
+        (): Server => {
+                if (!io) {
+                        throw new Error(
+                                "Socket.io not initialized"
+                        );
+                }
+
+                return io;
+        };

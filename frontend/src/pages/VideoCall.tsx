@@ -91,9 +91,7 @@ function VideoCall() {
 				}
 			} finally {
 				if (showToast) {
-					navigate(
-						-1
-					);
+					navigate(-1);
 				}
 			}
 		},
@@ -209,15 +207,12 @@ function VideoCall() {
 
 			endedRef.current = true;
 
-			/*
-			 * keepalive allows the browser to continue the
-			 * request while the page is being unloaded.
-			 */
 			fetch(
 				`${import.meta.env.VITE_BACKEND_URL}/video-call/end/${roomId}`,
 				{
 					method: "POST",
-					credentials: "include",
+					credentials:
+						"include",
 					keepalive: true,
 					headers: {
 						"Content-Type":
@@ -277,7 +272,9 @@ function VideoCall() {
 				<button
 					type="button"
 					onClick={() =>
-						navigate(-1)
+						navigate(
+							-1
+						)
 					}
 					className="rounded-md border px-4 py-2 text-sm"
 				>
@@ -307,18 +304,22 @@ function VideoCall() {
 
 			{/* ------------------------------------------------------
 			    End Call button
+			    Positioned at the top-right so it does not cover
+			    LiveKit's mobile controls at the bottom.
 			    ------------------------------------------------------ */}
 
-			<div className="pointer-events-none absolute bottom-6 left-0 right-0 z-50 flex justify-center">
+			<div className="absolute right-4 top-4 z-50">
 				<button
 					type="button"
-					disabled={endingCall}
+					disabled={
+						endingCall
+					}
 					onClick={() =>
 						handleEndCall(
 							true
 						)
 					}
-					className="pointer-events-auto rounded-full bg-red-600 px-6 py-3 font-semibold text-white shadow-lg transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+					className="rounded-full bg-red-600 px-5 py-3 text-sm font-semibold text-white shadow-lg transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60 sm:px-6 sm:py-3"
 				>
 					{endingCall
 						? "Ending..."
